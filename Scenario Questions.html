@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>Scenario Question</title>
+</head>
+
+<body>
+    <p><strong>General Instructions</strong></p>
+    <ol>
+        <li><strong>Download the <a href="https://jobexam.utas.edu.om/mod/resource/view.php?id=718"
+                    target="_blank">template files</a></strong> provided with this exam (including the database script
+            and the <code>.sql</code> / <code>.py</code> template files). Save them in a working directory on your
+            machine.</li>
+        <li>Complete all tasks using the specified files and filenames. Do <strong>not</strong> rename any of the
+            template files.</li>
+        <li>When you have finished all tasks, compress all required answer files into a single archive named
+            <code>&lt;your_candidate_id&gt;_data_engineer_partB.zip</code>.</li>
+        <li><strong>Upload</strong> this <code>.zip</code> file as your final answer for Part B in Moodle.</li>
+    </ol>
+    <p>After reading these instructions, complete the tasks below in order.</p>
+    <h3>Task 1 – Import the HR database</h3>
+    <ol>
+        <li>Use <strong>HeidiSQL</strong> (or the MariaDB command-line client) to import the database from the file <a
+                href="https://jobexam.utas.edu.om/pluginfile.php/19580/mod_resource/content/0/hr_install_maria.sql"
+                target="_blank"><code>hr_install_maria.sql</code></a>.</li>
+        <li>The script will create a database user with:
+            <ul>
+                <li>Username: <code>hr</code></li>
+                <li>Password: <code>data@2040</code></li>
+            </ul>
+            You <strong>should </strong>use these credentials in later tasks.
+        </li>
+    </ol>
+    <h3>Task 2 – Data verification queries</h3>
+    <p>Write SQL statements that verify the integrity and consistency of the imported data. For each query:</p>
+    <ul>
+        <li>Print the results of the query.</li>
+        <li>Use the <strong>exact</strong> column aliases specified below.</li>
+        <li>Once you have verified the output, copy your final queries into the file <code>task2_verify.sql</code>.</li>
+    </ul>
+    <ol>
+        <li><strong>Task 2.1 – Table record counts</strong><br /> Count how many records exist in each of the following
+            tables: <code>employees</code>, <code>departments</code>, <code>jobs</code>, and
+            <code>locations</code>.<br /> Return a single row with the following columns:
+            <ul>
+                <li><code>employees_count</code></li>
+                <li><code>departments_count</code></li>
+                <li><code>jobs_count</code></li>
+                <li><code>locations_count</code></li>
+            </ul>
+        </li>
+        <li><strong>Task 2.2 – Invalid employee departments</strong><br /> Check that every employee has a valid
+            department (that is, <code>department_id</code> is present in the <code>departments</code> table).<br />
+            Return a single number aliased as:
+            <ul>
+                <li><code>invalid_departments</code></li>
+            </ul>
+        </li>
+        <li><strong>Task 2.3 – Invalid department locations</strong><br /> Verify that all department locations exist in
+            the <code>locations</code> table.<br /> Return a single number aliased as:
+            <ul>
+                <li><code>invalid_locations</code></li>
+            </ul>
+        </li>
+        <li><strong>Task 2.4 – Range of hire dates</strong><br /> Find the range of employee hire dates (earliest and
+            latest).<br /> Return two columns:
+            <ul>
+                <li><code>earliest_hire</code></li>
+                <li><code>latest_hire</code></li>
+            </ul>
+        </li>
+        <li><strong>Task 2.5 – Top regions by number of employees</strong><br /> List the top 2 regions by number of
+            employees working in them.<br /> Return the following columns:
+            <ul>
+                <li><code>region_name</code></li>
+                <li><code>num_employees</code></li>
+            </ul>
+        </li>
+    </ol>
+    <h3>Task 3 – Transformation queries</h3>
+    <p>In this task you will write several analytical queries. The requirements are:</p>
+    <ul>
+        <li>Write each query in the <strong>order</strong> given below.</li>
+        <li>You <strong>must not</strong> create or modify any database objects (no <code>CREATE</code>,
+            <code>ALTER</code>, etc.).</li>
+        <li>Each answer must be a single <code>SELECT</code> statement.</li>
+        <li>Write your final answers in the file <code>task3_transform.sql</code>.</li>
+    </ul>
+    <ol>
+        <li><strong>Task 3.1 – Department salary summary</strong><br /> Write a query that returns, for each department
+            with at least 5 employees:
+            <ul>
+                <li><code>department_id</code></li>
+                <li><code>department_name</code></li>
+                <li><code>num_employees</code></li>
+                <li><code>avg_salary</code></li>
+                <li><code>total_salary</code></li>
+            </ul>
+            Sort the output by:<ol>
+                <li><code>total_salary</code> in descending order</li>
+                <li><code>department_id</code> in ascending order</li>
+            </ol>
+        </li>
+        <li><strong>Task 3.2 – Region salary summary</strong><br /> Write a query that returns, for each region:
+            <ul>
+                <li><code>region_name</code></li>
+                <li><code>num_employees</code></li>
+                <li><code>avg_salary</code></li>
+            </ul>
+            Sort the output by <code>avg_salary</code> in descending order.
+        </li>
+        <li><strong>Task 3.3 – Top job titles by employee count</strong><br /> Write a query that lists the top 5 job
+            titles with the highest number of employees, showing:
+            <ul>
+                <li><code>job_title</code></li>
+                <li><code>num_employees</code></li>
+                <li><code>min_salary</code></li>
+                <li><code>max_salary</code></li>
+            </ul>
+            Sorting requirements:<ol>
+                <li><code>num_employees</code> in descending order</li>
+                <li><code>job_title</code> in ascending order</li>
+            </ol>Limit the results to 5 rows.
+        </li>
+        <li><strong>Task 3.4 – Employees with most job changes</strong><br /> Using the <code>job_history</code> table,
+            write a query that returns the top 5 employees who have the highest number of job changes, showing:
+            <ul>
+                <li><code>employee_id</code></li>
+                <li><code>full_name</code> (concatenate <code>first_name</code> + space + <code>last_name</code>)</li>
+                <li><code>num_job_changes</code></li>
+                <li><code>max_salary</code></li>
+            </ul>
+            Sorting requirements:<ol>
+                <li><code>num_job_changes</code> in descending order</li>
+                <li><code>employee_id</code> in ascending order</li>
+            </ol>Limit the results to 5 rows.
+        </li>
+    </ol>
+    <h3>Task 4 – Python data munging and reporting</h3>
+    <p>In this task, you will write Python code that connects to the <code>hr</code> database using
+        <code>mysql.connector</code> and <code>pandas</code>. All printed outputs must follow the exact labels shown.
+        Write all your code in a single file named <code>task4_munge.py</code>.</p>
+    <h4>Task 4.1 – Region salary aggregation</h4>
+    <ol>
+        <li>Retrieve each region’s total salary and average salary using a join across the following tables:
+            <code>employees</code>, <code>departments</code>, <code>locations</code>, <code>countries</code>, and
+            <code>regions</code>.</li>
+        <li>Replace any <code>NULL</code> region names with the string <code>"Unknown"</code>.</li>
+        <li>Print <strong>exactly</strong> the following two lines (with your calculated values):
+            <pre><code>TOTAL_EMPLOYEES=&lt;int&gt;
+AVG_SALARY=&lt;float with 2dp&gt;</code></pre>
+        </li>
+        <li>Save the aggregated <code>DataFrame</code> to <code>out/region_salary.csv</code> with the columns:
+            <ul>
+                <li><code>region_name</code></li>
+                <li><code>total_salary</code></li>
+                <li><code>avg_salary</code></li>
+            </ul>
+        </li>
+    </ol>
+    <h4>Task 4.2 – Text-only bar chart and JSON summary</h4>
+    <p>Using the cleaned <code>DataFrame</code> from Task 4.1 (in the same Python file), write code that:</p>
+    <ol>
+        <li>Prints a text-only bar chart titled <code>AVG_SALARY_BY_REGION</code>.</li>
+        <li>For each region, print one line with:
+            <ul>
+                <li>The region name, left-aligned to 12 characters.</li>
+                <li>A pipe character: <code>|</code></li>
+                <li>A number of <code>#</code> symbols, one for every 1000 dollars of average salary.</li>
+            </ul>
+            <p>Example (format only – values will differ):</p>
+            <pre><code>AVG_SALARY_BY_REGION
+Europe      |##########
+Asia        |#####
+Unknown     |##</code></pre>
+        </li>
+        <li>Print a one-line JSON summary in the following format:
+            <pre><code>{"summary":{"highest_region":"&lt;name&gt;","avg_salary":&lt;float&gt;}}</code></pre>
+        </li>
+    </ol>
+</body>
+
+</html>
