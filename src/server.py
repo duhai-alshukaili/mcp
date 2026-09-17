@@ -4,7 +4,7 @@
 from config import (
     DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME, DB_CHARSET,
     DB_SSL, DB_SSL_CA, DB_SSL_CERT, DB_SSL_KEY, DB_SSL_VERIFY_CERT, DB_SSL_VERIFY_IDENTITY,
-    MCP_READ_ONLY, MCP_MAX_POOL_SIZE, EMBEDDING_PROVIDER,
+    MCP_READ_ONLY, MCP_MAX_POOL_SIZE, MCP_BLOCK_SENSITIVE_SHOW, EMBEDDING_PROVIDER,
     ALLOWED_ORIGINS, ALLOWED_HOSTS,
     logger
 )
@@ -47,11 +47,61 @@ class MariaDBServer:
     def __init__(self, server_name="MariaDB_Server", autocommit=True):
         self.mcp = FastMCP(server_name)
         self.pool: Optional[asyncmy.Pool] = None
-        self.autocommit = not MCP_READ_ONLY
+        self.autocommit = autocommit
         self.is_read_only = MCP_READ_ONLY
+        self.block_sensitive_show = MCP_BLOCK_SENSITIVE_SHOW
         logger.info(f"Initializing {server_name}...")
         if self.is_read_only:
             logger.warning("Server running in READ-ONLY mode. Write operations are disabled.")
+        if self.block_sensitive_show:
+            logger.info("Sensitive SHOW commands (PROCESSLIST, GRANTS, VARIABLES, replication status, etc.) are blocked.")
+        else:
+            logger.warning("MCP_BLOCK_SENSITIVE_SHOW is disabled: sensitive SHOW commands are permitted.")
+
+    async def _warn_if_file_privilege_enabled(self) -> None:
+        if self.pool is None:
+            return
+
+        try:
+            async with self.pool.acquire() as conn:
+                async with conn.cursor() as cursor:
+                    await cursor.execute("SELECT CURRENT_USER()")
+                    current_user_row = await cursor.fetchone()
+                    if not current_user_row:
+                        return
+
+                    if isinstance(current_user_row, dict):
+                        current_user = next(iter(current_user_row.values()))
+                    else:
+                        current_user = current_user_row[0]
+
+                    if not current_user:
+                        return
+
+                    await cursor.execute(f"SHOW GRANTS FOR {current_user}")
+                    grant_rows = await cursor.fetchall()
+
+                    grants: List[str] = []
+                    for row in grant_rows or []:
+                        if isinstance(row, dict):
+                            grants.append(str(next(iter(row.values()))))
+                        else:
+                            grants.append(str(row[0]))
+
+                    has_file_priv = any(
+                        re.search(r"\bFILE\b", grant, flags=re.IGNORECASE) and "ON *.*" in grant.upper()
+                        for grant in grants
+                    )
+
+                    if has_file_priv:
+                        logger.error(
+                            "Connected database user has the global FILE privilege. "
+                            "This means the server is NOT running in a fully read-only posture, because MariaDB/MySQL allow "
+                            "filesystem read/write via SQL (e.g. SELECT ... INTO OUTFILE, LOAD DATA INFILE, LOAD_FILE()). "
+                            "This cannot be fixed client-side; revoke FILE for the database user you are connecting as."
+                        )
+        except Exception as e:
+            logger.debug(f"Unable to determine whether FILE privilege is enabled: {e}")
 
     async def create_vector_store(self, database_name: str, vector_store_name: str, model_name: Optional[str] = None, distance_function: Optional[str] = None) -> dict:
         """
@@ -143,6 +193,8 @@ class MariaDBServer:
             
             self.pool = await create_safe_pool(**pool_params)
             logger.info("Connection pool initialized successfully.")
+            if self.is_read_only:
+                await self._warn_if_file_privilege_enabled()
         except AsyncMyError as e:
             logger.error(f"Failed to initialize database connection pool: {e}", exc_info=True)
             self.pool = None
@@ -172,20 +224,69 @@ class MariaDBServer:
             raise RuntimeError("Database connection pool not available.")
 
         allowed_prefixes = ('SELECT', 'SHOW', 'DESC', 'DESCRIBE', 'USE')
-        
-        # Strip SQL comments from query
-        # Remove single-line comments (-- comment)
-        sql_no_comments = re.sub(r'--.*?$', '', sql, flags=re.MULTILINE)
-        # Remove multi-line comments (/* comment */)
-        sql_no_comments = re.sub(r'/\*.*?\*/', '', sql_no_comments, flags=re.DOTALL)
-        sql_no_comments = sql_no_comments.strip()
-        
-        query_upper = sql_no_comments.upper()
+
+        # Build a normalized string for validation that reflects what MariaDB
+        # will actually execute. This must never *remove* content that the
+        # server treats as live SQL, or validation and execution diverge
+        # (parser differential). In particular, MariaDB "executable comments"
+        # (/*! ... */ and /*!VVVVV ... */) are NOT inert comments: their
+        # contents run as normal SQL. Only genuinely inert comments and
+        # string literal contents are safe to strip for validation purposes.
+
+        # Mask string literals first, so comment-like sequences inside data
+        # cannot be mistaken for actual comment syntax below.
+        sql_normalized = re.sub(r"'(?:[^'\\]|\\.)*'", "''", sql)
+        sql_normalized = re.sub(r'"(?:[^"\\]|\\.)*"', '""', sql_normalized)
+
+        # Remove single-line comments (-- comment and # comment), which never execute.
+        sql_normalized = re.sub(r'--.*?$', '', sql_normalized, flags=re.MULTILINE)
+        sql_normalized = re.sub(r'#.*?$', '', sql_normalized, flags=re.MULTILINE)
+
+        # Remove inert block comments: /* ... */ that are NOT executable
+        # comments. Executable comments start with /*! and must be left
+        # for the next step so their contents remain visible to validation.
+        sql_normalized = re.sub(r'/\*(?!!)[\s\S]*?\*/', '', sql_normalized)
+
+        # Unwrap executable comments: strip only the /*! or /*!VVVVV marker
+        # and the closing */, keeping the inner SQL intact so it is subject
+        # to the same checks below as ordinary SQL.
+        sql_normalized = re.sub(r'/\*!\d*', ' ', sql_normalized)
+        sql_normalized = sql_normalized.replace('*/', ' ')
+        sql_normalized = sql_normalized.strip()
+
+        query_upper = sql_normalized.upper()
         is_allowed_read_query = any(query_upper.startswith(prefix) for prefix in allowed_prefixes)
 
         if self.is_read_only and not is_allowed_read_query:
              logger.warning(f"Blocked potentially non-read-only query in read-only mode: {sql[:100]}...")
              raise PermissionError("Operation forbidden: Server is in read-only mode.")
+        if self.is_read_only:
+            # Check for LOAD_FILE() function (case-insensitive, outside strings/inert comments)
+            if re.search(r'\bLOAD_FILE\s*\(', query_upper):
+                logger.warning(f"Blocked query containing LOAD_FILE(): {sql[:100]}...")
+                raise PermissionError("Operation forbidden: LOAD_FILE() is not allowed for security reasons.")
+
+            # Check for SELECT ... INTO OUTFILE/DUMPFILE (case-insensitive, outside strings/inert comments)
+            if re.search(r'\bINTO\s+(OUTFILE|DUMPFILE)\b', query_upper):
+                logger.warning(f"Blocked query containing SELECT INTO OUTFILE or DUMPFILE: {sql[:100]}...")
+                raise PermissionError("Operation forbidden: SELECT INTO OUTFILE and SELECT INTO DUMPFILE are not allowed for security reasons.")
+
+        # SHOW admits an entire subcommand namespace, some of which leak
+        # cross-connection or system-sensitive data (e.g. SHOW PROCESSLIST
+        # exposes query text/parameters from *other* active sessions).
+        # This is gated independently of read-only mode via
+        # MCP_BLOCK_SENSITIVE_SHOW: some deployments want it blocked even
+        # when writes are allowed, others explicitly want it available in
+        # read-only mode.
+        if self.block_sensitive_show and query_upper.startswith('SHOW') and re.search(
+            r'\bSHOW\s+(PROCESSLIST|(GLOBAL\s+|SESSION\s+)?VARIABLES|'
+            r'MASTER\s+STATUS|BINARY\s+LOGS|BINLOG\s+EVENTS|'
+            r'(SLAVE|REPLICA)\s+STATUS|SLAVE\s+HOSTS|'
+            r'GRANTS|CREATE\s+USER|PRIVILEGES|ENGINE\s+STATUS)\b',
+            query_upper,
+        ):
+            logger.warning(f"Blocked sensitive SHOW query: {sql[:100]}...")
+            raise PermissionError("Operation forbidden: this SHOW variant is blocked by MCP_BLOCK_SENSITIVE_SHOW.")
 
         logger.info(f"Executing query (DB: {database or DB_NAME}): {sql[:100]}...")
         if params:
@@ -206,7 +307,10 @@ class MariaDBServer:
                         logger.info(f"Switching database context from '{actual_current_db}' to '{database}'")
                         await cursor.execute(f"USE `{database}`")
 
-                    await cursor.execute(sql, params)
+                    if params is None:
+                        await cursor.execute(sql)
+                    else:
+                        await cursor.execute(sql, params)
                     results = await cursor.fetchall()
                     logger.info(f"Query executed successfully, {len(results)} rows returned.")
                     return results if results else []
@@ -451,7 +555,7 @@ class MariaDBServer:
 
     async def execute_sql(self, sql_query: str, database_name: str, parameters: Optional[List[Any]] = None) -> List[Dict[str, Any]]:
         """
-        Executes a read-only SQL query (primarily SELECT, SHOW, DESCRIBE) against a specified database
+        Executes a SQL query (primarily SELECT, SHOW, DESCRIBE) against a specified database
         and returns the results. Uses parameterized queries for safety.
         Example `parameters`: ["value1", 123] corresponding to %s placeholders in `sql_query`.
         """

@@ -7,9 +7,11 @@ for security reasons (to prevent SQL injection via multiple statements).
 
 import asyncio
 from asyncmy.connection import Connection
-from asyncmy.constants.CLIENT import MULTI_STATEMENTS
+from asyncmy.constants.CLIENT import MULTI_STATEMENTS, LOCAL_FILES
 from asyncmy.pool import Pool
 from asyncmy.contexts import _PoolContextManager
+
+from config import MCP_READ_ONLY
 
 
 class SafeConnection(Connection):
@@ -30,6 +32,9 @@ class SafeConnection(Connection):
         """
         # Clear the MULTI_STATEMENTS bit (bit 16 = 0x10000 = 65536) before connecting
         self._client_flag = self._client_flag & ~MULTI_STATEMENTS
+
+        if MCP_READ_ONLY:
+            self._client_flag = self._client_flag & ~LOCAL_FILES
         
         # Now proceed with normal connection
         return await super().connect()
@@ -44,6 +49,21 @@ async def safe_connect(**kwargs) -> SafeConnection:
     conn = SafeConnection(**kwargs)
     await conn.connect()
     return conn
+
+
+def _connection_stream_broken(conn) -> bool:
+    """
+    Check whether a pooled connection's underlying stream is no longer usable.
+
+    asyncmy has changed how it exposes this across versions: newer releases
+    expose a `_stream_broken` property, while older releases (and the pinned
+    minimum, asyncmy>=0.2.10) only expose the raw `_reader` StreamReader.
+    Support both so the pool doesn't break on either side of that change.
+    """
+    if hasattr(conn, "_stream_broken"):
+        return bool(conn._stream_broken)
+    reader = getattr(conn, "_reader", None)
+    return reader is not None and (reader.at_eof() or reader.exception())
 
 
 class SafePool(Pool):
@@ -64,12 +84,15 @@ class SafePool(Pool):
         n = 0
         while n < free_size:
             conn = self._free[-1]
-            if conn._reader.at_eof() or conn._reader.exception():
+            if _connection_stream_broken(conn):
                 self._free.pop()
                 conn.close()
             elif self._recycle > -1 and self._loop.time() - conn.last_usage > self._recycle:
                 self._free.pop()
-                conn.close()
+                try:
+                    await conn.ensure_closed()
+                except Exception:
+                    conn.close()
             else:
                 self._free.rotate()
             n += 1

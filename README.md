@@ -11,6 +11,7 @@ The MCP MariaDB Server provides a Model Context Protocol (MCP) interface for man
 - [Available Tools](#available-tools)
 - [Embeddings & Vector Store](#embeddings--vector-store)
 - [Configuration & Environment Variables](#configuration--environment-variables)
+- [Security Considerations](#security-considerations)
 - [Installation & Setup](#installation--setup)
 - [Usage Examples](#usage-examples)
 - [Integration - Claude desktop/Cursor/Windsurf](#integration---claude-desktopcursorwindsurf)
@@ -145,6 +146,7 @@ All configuration is via environment variables (typically set in a `.env` file):
 | `DB_SSL_VERIFY_CERT`   | Verify server certificate (`true`/`false`)             | No       | `true`       |
 | `DB_SSL_VERIFY_IDENTITY` | Verify server hostname identity (`true`/`false`)     | No       | `false`      |
 | `MCP_READ_ONLY`        | Enforce read-only SQL mode (`true`/`false`)            | No       | `true`       |
+| `MCP_BLOCK_SENSITIVE_SHOW` | Block sensitive `SHOW` commands (`PROCESSLIST`, `GRANTS`, `VARIABLES`, `MASTER`/`REPLICA STATUS`, `BINARY LOGS`, etc.) that can leak cross-connection query text, credentials/privileges, or replication topology. Set independently of `MCP_READ_ONLY` (`true`/`false`) | No | `true` |
 | `MCP_MAX_POOL_SIZE`    | Max DB connection pool size                            | No       | `10`         |
 | `EMBEDDING_PROVIDER`   | Embedding provider (`openai`/`gemini`/`huggingface`)   | No     |`None`(Disabled)|
 | `OPENAI_API_KEY`       | API key for OpenAI embeddings                          | Yes (if EMBEDDING_PROVIDER=openai) | |
@@ -227,6 +229,11 @@ export FASTMCP_SERVER_AUTH_GOOGLE_CLIENT_ID="123456.apps.googleusercontent.com"
 export FASTMCP_SERVER_AUTH_GOOGLE_CLIENT_SECRET="GOCSPX-..."
 ```
 
+### Database User Privileges - **IMPORTANT**
+
+**⚠️ The only way to guarantee 100% read-only access with absolute certainty is to configure the MariaDB user with appropriate privileges.** The READ_ONLY flag is a best effort attempt to prevent write operations, but it is based upon a whitelist of allowed queries and against a truly adversarial user it is not a substitute for proper database user privileges.
+
+For production use, you should create a dedicated database user with minimal privileges. This is also recommended to show the LLM only the data it may need to perform its task even outside of read-only mode.
 ---
 
 ## Installation & Setup
